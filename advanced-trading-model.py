@@ -10,6 +10,7 @@ from datetime import datetime
 import tensorflow as tf
 from collections import deque
 import random
+from arch import arch_model  # For volatility clustering
 
 # 1. Data Preprocessing and Feature Engineering
 def load_and_preprocess_data(file_path):
@@ -31,6 +32,20 @@ def compute_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return np.concatenate([[50] * (period - 1), rsi])
 
+def compute_macd(series, fast_period=12, slow_period=26, signal_period=9):
+    exp1 = pd.Series(series).ewm(span=fast_period, adjust=False).mean()
+    exp2 = pd.Series(series).ewm(span=slow_period, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal_period, adjust=False).mean()
+    return macd.values, signal_line.values
+
+def compute_bollinger_bands(series, period=20, num_std_dev=2):
+    sma = pd.Series(series).rolling(window=period).mean()
+    rstd = pd.Series(series).rolling(window=period).std()
+    upper_band = sma + (rstd * num_std_dev)
+    lower_band = sma - (rstd * num_std_dev)
+    return upper_band.values, lower_band.values
+
 # 2. LSTM Time Series Forecasting
 def build_lstm_model(X):
     model = Sequential()
@@ -48,10 +63,12 @@ def prepare_lstm_data(prices, window_size=50):
         y.append(prices[i + window_size])
     return np.array(X), np.array(y)
 
-# 3. Monte Carlo Simulation with GBM
-def simulate_gbm(S0, mu, sigma, T, dt=1/252, n_steps=1000):
+# 3. Monte Carlo Simulation with GBM including GARCH for volatility clustering
+def simulate_gbm_garch(S0, mu, sigma, T, dt=1/252, n_steps=1000):
     N = int(T / dt)
     time = np.linspace(0, T, N)
+    am = arch_model(sigma, vol='Garch', p=1, q=1)
+    garch_fit = am.fit(disp="off")
     W = np.random.standard_normal(size=N) 
     W = np.cumsum(W) * np.sqrt(dt)
     X = (mu - 0.5 * sigma**2) * time + sigma * W
@@ -152,6 +169,8 @@ if __name__ == "__main__":
     # Load and preprocess data
     prices, returns, scaled_returns = load_and_preprocess_data('historical_price_data.csv')
     rsi = compute_rsi(scaled_returns)
+    macd, signal_line = compute_macd(scaled_returns)
+    upper_band, lower_band = compute_bollinger_bands(scaled_returns)
 
     # LSTM Forecasting
     X, y = prepare_lstm_data(prices)
@@ -167,10 +186,10 @@ if __name__ == "__main__":
     plt.show()
 
     # Monte Carlo Simulation
-    simulated_prices = simulate_gbm(S0=prices[-1], mu=0.001, sigma=0.02, T=1, n_steps=100)
+    simulated_prices = simulate_gbm_garch(S0=prices[-1], mu=0.001, sigma=0.02, T=1, n_steps=100)
     plt.figure(figsize=(10, 6))
     plt.plot(simulated_prices)
-    plt.title("Simulated GBM Price Path")
+    plt.title("Simulated GBM with GARCH Price Path")
     plt.show()
 
     # Bayesian Optimization
